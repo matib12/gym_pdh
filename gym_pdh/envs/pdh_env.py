@@ -17,7 +17,7 @@ class PdhEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self):
-        self.mpos_step = 1
+        self.mpos_step = 1000000.
         
         self.screen_width = 600
         self.screen_height = 400
@@ -26,10 +26,10 @@ class PdhEnv(gym.Env):
         
         # Real values from MCIR fit
         self.reflectivity = 0.9988144404882143
-        self.FSR = 550.0   # in MHz
-        self.Pc = 1.       # indicates maximum of the trans and refl signals
-        self.Ps = 0.1      # fraction of Pc power
-        self.Omega = 80.0  # in MHz
+        self.FSR = 550.0e6   # in Hz
+        self.Pc = 1.         # indicates maximum of the trans and refl signals
+        self.Ps = 0.1        # fraction of Pc power
+        self.Omega = 80.0e6  # in Hz
         self.ampl = -0.0402761612065936
         
         self.sideband_hight = (self.Pc * self.Ps)*1.01  # To exclude SB
@@ -141,16 +141,17 @@ class PdhEnv(gym.Env):
         step = self.mpos_step if action==1 else -self.mpos_step        
         
         mpos = mpos + step
-        n_err = self.gym_pdh.cavity_err(mpos)
+        mposrad = 2.*np.pi*mpos
+        n_err = self.gym_pdh.cavity_err(mposrad)
         err_dot = n_err - err
-        n_refl = self.gym_pdh.cavity_refl(mpos)
+        n_refl = self.gym_pdh.cavity_refl(mposrad)
         refl_dot = n_refl - refl
-        n_trans = self.gym_pdh.cavity_trans(mpos)
+        n_trans = self.gym_pdh.cavity_trans(mposrad)
         trans_dot = n_trans - trans
         
         self.state = (n_err,err_dot,n_refl,refl_dot,n_trans,trans_dot,mpos)
-        done =  mpos < -self.mpos_threshold \
-                or mpos > self.mpos_threshold
+        done = mpos < -self.mpos_threshold \
+               or mpos > self.mpos_threshold
         done = bool(done)
         
         """
@@ -159,7 +160,7 @@ class PdhEnv(gym.Env):
         2. Reward is zero if Refl is less than Pc*Ps. Locked on a sideband?
         3. Reward takes into account the derivative of refl.
         """
-        r = self.state[2]
+        r = self.state[4]
         #if r > self.sideband_hight:
         #    return r # + self.state[3]  # If uncomment chenck reward range in __init__
         #else:
@@ -180,6 +181,8 @@ class PdhEnv(gym.Env):
         return np.array(self.state), reward, done, {}
 
     def reset(self):
+        self._show()
+
         mpos = self.np_random.uniform(low=-self.FSR, high=self.FSR)
         noises = self.np_random.uniform(low=-0.05, high=0.05, size=(7,))  # additional noise to mpos which is already random generated
         noises = noises + [self.gym_pdh.cavity_err(mpos), 0.,\
@@ -192,40 +195,46 @@ class PdhEnv(gym.Env):
         self.iterator = 0
         
         self.steps_beyond_done = None
-        
+
         return np.array(self.state)
         
     def _show(self):
-        img = Image.fromarray(self.data, 'RGB')  # of into close()
-        #img.save('my.png')
-        img.show()
+        try:
+            img = Image.fromarray(self.data, 'RGB')  # of into close()
+            #img.save('my.png')
+            img.show()
+        except:
+            print("Cannot visualize")
 
     def render(self, mode='human', close=False):
-        index = self.iterator
-        
-        if index >= self.screen_width:
-            logger.warn("You are calling 'render()' even though this environment has already returned done = True. You should always call 'reset()' once you receive 'done = True' -- any further steps are undefined behavior.")
+        if mode == 'rgb_array':
+            index = self.iterator
             
-        hight = self.screen_height-1
+            if index >= self.screen_width:
+                logger.warn("You are calling 'render()' even though this environment has already returned done = True. You should always call 'reset()' once you receive 'done = True' -- any further steps are undefined behavior.")
+                
+            hight = self.screen_height-1
+            
+            column_wd = 1
         
-        column_wd = 1
-    
-        world_width = self.screen_width/column_wd  # number of columns(steps) in the visualisation
-        
-        err_pos = np.interp(self.state[0], (-1., 1.), (0, hight))
-        refl_pos = np.interp(self.state[2], (0., 1.), (0, hight))
-        trans_pos = np.interp(self.state[4], (0., 1.), (0, hight))
-        mpos_pos = np.interp(self.state[6], (-self.mpos_threshold, self.mpos_threshold), (0, hight))
-        
-        self.data[int(err_pos), index] = [255, 0, 0]  # error Red pixel in index column and err_pos row
-        self.data[int(refl_pos), index] = [0, 255, 0]  # reflection Blue
-        self.data[int(trans_pos), index] = [0, 0, 255]  # transmission Green
-        self.data[int(mpos_pos), index] = [255, 255, 255]  # mpos White
-        
-        self.iterator += 1
-        #if self.viewer is None:
-        #    from gym.envs.classic_control import rendering
-        #    self.viewer = rendering.Viewer(screen_width, screen_height)
+            world_width = self.screen_width/column_wd  # number of columns(steps) in the visualisation
+            
+            err_pos = np.interp(self.state[0], (-1., 1.), (0, hight))
+            refl_pos = np.interp(self.state[2], (0., 1.), (0, hight))
+            trans_pos = np.interp(self.state[4], (0., 1.), (0, hight))
+            mpos_pos = np.interp(self.state[6], (-self.mpos_threshold, self.mpos_threshold), (0, hight))
+            
+            self.data[int(err_pos), index] = [255, 0, 0]  # error Red pixel in index column and err_pos row
+            self.data[int(refl_pos), index] = [0, 255, 0]  # reflection Blue
+            self.data[int(trans_pos), index] = [0, 0, 255]  # reward but not transmission Green
+            self.data[int(mpos_pos), index] = [255, 255, 255]  # mpos White
+            
+            self.iterator += 1
+            #if self.viewer is None:
+            #    from gym.envs.classic_control import rendering
+            #    self.viewer = rendering.Viewer(screen_width, screen_height)
+        elif mode == 'human':
+            pass
         
     def close(self):
         self._show()
